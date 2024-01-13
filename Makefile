@@ -1,7 +1,7 @@
 include mk/common.mk
 
 CC ?= gcc
-CFLAGS = -O2 -Wall
+CFLAGS = -O0 -Wall -g
 LDFLAGS = -lpthread
 SHELL := /bin/bash
 

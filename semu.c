@@ -193,6 +193,7 @@ exception_t ram_store(struct ram *ram,
         ram->data[index + 6] = (value >> 48) & 0xff;
         ram->data[index + 5] = (value >> 40) & 0xff;
         ram->data[index + 4] = (value >> 32) & 0xff;
+        // 没有break，8字节的时候都会执行，4字节从case 32开始，以此类推
     case 32:
         ram->data[index + 3] = (value >> 24) & 0xff;
         ram->data[index + 2] = (value >> 16) & 0xff;
@@ -214,6 +215,7 @@ static void fatal(const char *msg)
 
 struct clint {
     uint64_t mtime, mtimecmp;
+    bool interrupting;
 };
 
 struct clint *clint_new()
@@ -259,6 +261,26 @@ static inline exception_t clint_store(struct clint *clint,
         break;
     }
     return OK;
+}
+
+static inline bool clint_is_interrupting(struct clint *clint)
+{
+    if (clint->interrupting)
+    {
+        clint->interrupting = false;
+        return true;
+    }
+
+    return false;
+}
+
+void tick_clint(struct clint *clint)
+{
+    clint->mtime++;
+
+    if ((clint->mtimecmp > 0) && (clint->mtime == clint->mtimecmp)) {
+        clint->interrupting = true;
+    }
 }
 
 struct plic {
@@ -351,6 +373,7 @@ static void *uart_thread_func(void *priv)
         while ((uart->data[UART_LSR - UART_BASE] & UART_LSR_RX) == 1)
             pthread_cond_wait(&uart->cond, &uart->lock);
 
+        printf("from emulator: [%c]\n", c);
         uart->data[0] = c;
         uart->interrupting = true;
         uart->data[UART_LSR - UART_BASE] |= UART_LSR_RX;
@@ -659,6 +682,11 @@ void bus_disk_access(struct bus *bus)
     uint64_t new_id = virtio_new_id(bus->virtio);
     if (bus_store(bus, used_addr + 2, 16, new_id % 8) != OK)
         fatal("write to RAM");
+}
+
+void tick_bus(struct bus *bus)
+{
+    tick_clint(bus->clint);
 }
 
 /* USER is a mode for application which runs on operating system.
@@ -1324,6 +1352,7 @@ exception_t cpu_execute(struct cpu *cpu, const uint64_t insn)
     }
     case 0x63: {
         uint64_t imm = (uint64_t) ((int32_t) (insn & 0x80000000) >> 19) |
+        //uint64_t imm = (uint64_t) ((uint32_t) (insn >> 19) & (1<<12)) |
                        ((insn & 0x80) << 4) | ((insn >> 20) & 0x7e0) |
                        ((insn >> 7) & 0x1e);
 
@@ -1539,6 +1568,9 @@ interrupt_t cpu_check_pending_interrupt(struct cpu *cpu)
         } else if (virtio_is_interrupting(cpu->bus->virtio)) {
             bus_disk_access(cpu->bus);
             irq = VIRTIO_IRQ;
+        } else if (clint_is_interrupting(cpu->bus->clint)) {
+            cpu_store_csr(cpu, MIP, cpu_load_csr(cpu, MIP) | MIP_MTIP);
+            break;
         } else
             break;
 
@@ -1750,6 +1782,8 @@ int semu_start(int argc, char **argv)
             if (exception_is_fatal(e))
                 break;
         }
+
+        tick_bus(cpu->bus);
 
         interrupt_t intr;
         if ((intr = cpu_check_pending_interrupt(cpu)) != NONE)
