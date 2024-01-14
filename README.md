@@ -114,3 +114,6 @@ You can fix it by executing `brew install md5sha1sum`. See [riscv-tests #190](ht
 
 `semu` is released under the MIT License.
 Use of this source code is governed by a MIT-style license that can be found in the LICENSE file.
+
+## MT
+- 08运行失败，当前看是实现的virtio驱动有问题。(fixed)

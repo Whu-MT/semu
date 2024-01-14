@@ -22,9 +22,9 @@
 #define PLIC_BASE 0xc000000
 #define PLIC_SIZE 0x4000000
 #define PLIC_PENDING (PLIC_BASE + 0x1000)
-#define PLIC_SENABLE (PLIC_BASE + 0x2080)
-#define PLIC_SPRIORITY (PLIC_BASE + 0x201000)
-#define PLIC_SCLAIM (PLIC_BASE + 0x201004)
+#define PLIC_SENABLE (PLIC_BASE + 0x2000)
+#define PLIC_SPRIORITY (PLIC_BASE + 0x200000)
+#define PLIC_SCLAIM (PLIC_BASE + 0x200004)
 
 #define UART_BASE 0x10000000
 #define UART_SIZE 0x100
@@ -541,12 +541,15 @@ exception_t virtio_store(struct virtio *vio,
     return OK;
 }
 
+uint32_t delay = 0;
 static inline bool virtio_is_interrupting(struct virtio *vio)
 {
-    if (vio->queue_notify != -1) {
+    if (vio->queue_notify != -1 && delay >= 50) {
         vio->queue_notify = -1;
+        delay = 0;
         return true;
     }
+    delay++;
     return false;
 }
 
@@ -629,14 +632,15 @@ exception_t bus_store(struct bus *bus,
 void bus_disk_access(struct bus *bus)
 {
     uint64_t desc_addr = virtio_desc_addr(bus->virtio);
-    uint64_t avail_addr = desc_addr + 0x40, used_addr = desc_addr + 4096;
+    // 0x80: 8 * 16
+    uint64_t avail_addr = desc_addr + 0x80, used_addr = desc_addr + 4096;
 
     uint64_t offset;
-    if (bus_load(bus, avail_addr + 1, 16, &offset) != OK)
+    if (bus_load(bus, avail_addr + 2, 16, &offset) != OK)
         fatal("read offset");
 
     uint64_t index;
-    if (bus_load(bus, avail_addr + (offset % VIRTIO_DESC_NUM) + 2, 16,
+    if (bus_load(bus, avail_addr + (offset % VIRTIO_DESC_NUM)*2 + 4, 16,
                  &index) != OK)
         fatal("read index");
 
@@ -680,7 +684,7 @@ void bus_disk_access(struct bus *bus)
     }
 
     uint64_t new_id = virtio_new_id(bus->virtio);
-    if (bus_store(bus, used_addr + 2, 16, new_id % 8) != OK)
+    if (bus_store(bus, used_addr + 2, 16, new_id) != OK)
         fatal("write to RAM");
 }
 
@@ -1575,9 +1579,8 @@ interrupt_t cpu_check_pending_interrupt(struct cpu *cpu)
             break;
 
         bus_store(cpu->bus, PLIC_SCLAIM, 32, irq);
-        cpu_store_csr(cpu, MIP, cpu_load_csr(cpu, MIP) | MIP_SEIP);
+        cpu_store_csr(cpu, MIP, cpu_load_csr(cpu, MIP) | MIP_MEIP);
     } while (0);
-
     uint64_t pending = cpu_load_csr(cpu, MIE) & cpu_load_csr(cpu, MIP);
     if (pending & MIP_MEIP) {
         cpu_store_csr(cpu, MIP, cpu_load_csr(cpu, MIP) & ~MIP_MEIP);
